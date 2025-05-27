@@ -59,6 +59,20 @@ class Neo4JStorage(BaseGraphStorage):
         self._driver = None
 
     async def initialize(self):
+
+        # get db name from query config if available
+        db_configs = self.global_config["db_name_config"]
+        database_name = None
+        if db_configs and isinstance(db_configs, dict) and "neo4j" in db_configs:
+            database_name = db_configs["neo4j"]
+            logger.info(f"\033[32mNEO4J, Using database name from db_configs: {database_name}\033[0m")
+
+        else:
+            raise Exception("No database name provided in global_config for NEO4J.")
+
+
+        
+
         URI = os.environ.get("NEO4J_URI", config.get("neo4j", "uri", fallback=None))
         USERNAME = os.environ.get(
             "NEO4J_USERNAME", config.get("neo4j", "username", fallback=None)
@@ -90,9 +104,7 @@ class Neo4JStorage(BaseGraphStorage):
                 config.get("neo4j", "max_transaction_retry_time", fallback=30.0),
             ),
         )
-        DATABASE = os.environ.get(
-            "NEO4J_DATABASE", re.sub(r"[^a-zA-Z0-9-]", "-", self.namespace)
-        )
+        DATABASE = database_name
 
         self._driver: AsyncDriver = AsyncGraphDatabase.driver(
             URI,
@@ -286,6 +298,7 @@ class Neo4JStorage(BaseGraphStorage):
             database=self._DATABASE, default_access_mode="READ"
         ) as session:
             try:
+                logger.info(f"\033[32mNeo4j getting node with {self._DATABASE}\033[0m")
                 query = "MATCH (n:base {entity_id: $entity_id}) RETURN n"
                 result = await session.run(query, entity_id=node_id)
                 try:

@@ -213,6 +213,7 @@ class PostgreSQLDB:
     ) -> dict[str, Any] | None | list[dict[str, Any]]:
         # start_time = time.time()
         # logger.info(f"PostgreSQL, Querying:\n{sql}")
+        logger.info(f"\033[33mPostgreSQL, Querying database: {self.database}\033[0m")
 
         async with self.pool.acquire() as connection:  # type: ignore
             if with_age and graph_name:
@@ -285,9 +286,17 @@ class ClientManager:
     _lock = asyncio.Lock()
 
     @staticmethod
-    def get_config() -> dict[str, Any]:
+    def get_config(db_configs=None) -> dict[str, Any]:
         config = configparser.ConfigParser()
         config.read("config.ini", "utf-8")
+
+        database_name = None
+        if db_configs and isinstance(db_configs, dict) and "postgres" in db_configs:
+            database_name = db_configs["postgres"]
+            logger.info(f"\033[32mPostgreSQL, Using database name from db_configs: {database_name}\033[0m")
+        else:
+            raise Exception("No database name provided in global_config for NEO4J.")
+
 
         return {
             "host": os.environ.get(
@@ -304,13 +313,13 @@ class ClientManager:
                 "POSTGRES_PASSWORD",
                 config.get("postgres", "password", fallback=None),
             ),
-            "database": os.environ.get(
-                "POSTGRES_DATABASE",
-                config.get("postgres", "database", fallback="postgres"),
+            "database": database_name or os.environ.get(
+            "POSTGRES_DATABASE",
+            config.get("postgres", "database", fallback=None),
             ),
-            "workspace": os.environ.get(
-                "POSTGRES_WORKSPACE",
-                config.get("postgres", "workspace", fallback="default"),
+            "workspace": database_name or os.environ.get(
+            "POSTGRES_WORKSPACE",
+            config.get("postgres", "workspace", fallback="default"),
             ),
             "max_connections": os.environ.get(
                 "POSTGRES_MAX_CONNECTIONS",
@@ -319,17 +328,19 @@ class ClientManager:
         }
 
     @classmethod
-    async def get_client(cls) -> PostgreSQLDB:
+    async def get_client(cls, db_configs=None) -> PostgreSQLDB:
+        config = cls.get_config(db_configs)
+        database_name = config["database"]
+
         async with cls._lock:
-            if cls._instances["db"] is None:
-                config = ClientManager.get_config()
+            if database_name not in cls._instances:
+                logger.info(f"Creating new PostgreSQL connection for database: {database_name}")
                 db = PostgreSQLDB(config)
                 await db.initdb()
                 await db.check_tables()
-                cls._instances["db"] = db
-                cls._instances["ref_count"] = 0
+                cls._instances[database_name] = db
             cls._instances["ref_count"] += 1
-            return cls._instances["db"]
+            return cls._instances[database_name]
 
     @classmethod
     async def release_client(cls, db: PostgreSQLDB):
@@ -355,7 +366,8 @@ class PGKVStorage(BaseKVStorage):
 
     async def initialize(self):
         if self.db is None:
-            self.db = await ClientManager.get_client()
+            self.db = await ClientManager.get_client(self.global_config["db_name_config"])
+
 
     async def finalize(self):
         if self.db is not None:
@@ -603,7 +615,8 @@ class PGVectorStorage(BaseVectorStorage):
 
     async def initialize(self):
         if self.db is None:
-            self.db = await ClientManager.get_client()
+            self.db = await ClientManager.get_client(self.global_config["db_name_config"])
+
 
     async def finalize(self):
         if self.db is not None:
@@ -884,7 +897,7 @@ class PGDocStatusStorage(DocStatusStorage):
 
     async def initialize(self):
         if self.db is None:
-            self.db = await ClientManager.get_client()
+            self.db = await ClientManager.get_client(self.global_config["db_name_config"])
 
     async def finalize(self):
         if self.db is not None:
@@ -1151,7 +1164,8 @@ class PGGraphStorage(BaseGraphStorage):
 
     async def initialize(self):
         if self.db is None:
-            self.db = await ClientManager.get_client()
+            self.db = await ClientManager.get_client(self.global_config["db_name_config"])
+
 
         # Execute each statement separately and ignore errors
         queries = [
