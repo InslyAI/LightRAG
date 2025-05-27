@@ -113,6 +113,10 @@ class LightRAG:
     doc_status_storage: str = field(default="JsonDocStatusStorage")
     """Storage type for tracking document processing statuses."""
 
+    db_name_config: dict[str, dict[str, Any]] = field(default_factory=dict)
+    """Configuration for database names to use (postgres, neo4j)."""
+
+
     # Logging (Deprecated, use setup_logger in utils.py instead)
     # ---
     log_level: int | None = field(default=None)
