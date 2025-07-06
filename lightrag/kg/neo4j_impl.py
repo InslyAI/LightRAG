@@ -1,4 +1,3 @@
-import inspect
 import os
 import re
 from dataclasses import dataclass
@@ -17,6 +16,7 @@ import logging
 from ..utils import logger
 from ..base import BaseGraphStorage
 from ..types import KnowledgeGraph, KnowledgeGraphNode, KnowledgeGraphEdge
+from ..constants import GRAPH_FIELD_SEP
 import pipmaster as pm
 
 if not pm.is_installed("neo4j"):
@@ -320,7 +320,7 @@ class Neo4JStorage(BaseGraphStorage):
                                 for label in node_dict["labels"]
                                 if label != "base"
                             ]
-                        logger.debug(f"Neo4j query node {query} return: {node_dict}")
+                        # logger.debug(f"Neo4j query node {query} return: {node_dict}")
                         return node_dict
                     return None
                 finally:
@@ -395,9 +395,9 @@ class Neo4JStorage(BaseGraphStorage):
                         return 0
 
                     degree = record["degree"]
-                    logger.debug(
-                        f"Neo4j query node degree for {node_id} return: {degree}"
-                    )
+                    # logger.debug(
+                    #     f"Neo4j query node degree for {node_id} return: {degree}"
+                    # )
                     return degree
                 finally:
                     await result.consume()  # Ensure result is fully consumed
@@ -437,7 +437,7 @@ class Neo4JStorage(BaseGraphStorage):
                     logger.warning(f"No node found with label '{nid}'")
                     degrees[nid] = 0
 
-            logger.debug(f"Neo4j batch node degree query returned: {degrees}")
+            # logger.debug(f"Neo4j batch node degree query returned: {degrees}")
             return degrees
 
     async def edge_degree(self, src_id: str, tgt_id: str) -> int:
@@ -525,7 +525,7 @@ class Neo4JStorage(BaseGraphStorage):
                     if records:
                         try:
                             edge_result = dict(records[0]["edge_properties"])
-                            logger.debug(f"Result: {edge_result}")
+                            # logger.debug(f"Result: {edge_result}")
                             # Ensure required keys exist with defaults
                             required_keys = {
                                 "weight": 0.0,
@@ -541,9 +541,9 @@ class Neo4JStorage(BaseGraphStorage):
                                         f"missing {key}, using default: {default_value}"
                                     )
 
-                            logger.debug(
-                                f"{inspect.currentframe().f_code.co_name}:query:{query}:result:{edge_result}"
-                            )
+                            # logger.debug(
+                            #     f"{inspect.currentframe().f_code.co_name}:query:{query}:result:{edge_result}"
+                            # )
                             return edge_result
                         except (KeyError, TypeError, ValueError) as e:
                             logger.error(
@@ -558,9 +558,9 @@ class Neo4JStorage(BaseGraphStorage):
                                 "keywords": None,
                             }
 
-                    logger.debug(
-                        f"{inspect.currentframe().f_code.co_name}: No edge found between {source_node_id} and {target_node_id}"
-                    )
+                    # logger.debug(
+                    #     f"{inspect.currentframe().f_code.co_name}: No edge found between {source_node_id} and {target_node_id}"
+                    # )
                     # Return None when no edge found
                     return None
                 finally:
@@ -739,6 +739,47 @@ class Neo4JStorage(BaseGraphStorage):
             await result.consume()  # Ensure results are fully consumed
             return edges_dict
 
+    async def get_nodes_by_chunk_ids(self, chunk_ids: list[str]) -> list[dict]:
+        async with self._driver.session(
+            database=self._DATABASE, default_access_mode="READ"
+        ) as session:
+            query = """
+            UNWIND $chunk_ids AS chunk_id
+            MATCH (n:base)
+            WHERE n.source_id IS NOT NULL AND chunk_id IN split(n.source_id, $sep)
+            RETURN DISTINCT n
+            """
+            result = await session.run(query, chunk_ids=chunk_ids, sep=GRAPH_FIELD_SEP)
+            nodes = []
+            async for record in result:
+                node = record["n"]
+                node_dict = dict(node)
+                # Add node id (entity_id) to the dictionary for easier access
+                node_dict["id"] = node_dict.get("entity_id")
+                nodes.append(node_dict)
+            await result.consume()
+            return nodes
+
+    async def get_edges_by_chunk_ids(self, chunk_ids: list[str]) -> list[dict]:
+        async with self._driver.session(
+            database=self._DATABASE, default_access_mode="READ"
+        ) as session:
+            query = """
+            UNWIND $chunk_ids AS chunk_id
+            MATCH (a:base)-[r]-(b:base)
+            WHERE r.source_id IS NOT NULL AND chunk_id IN split(r.source_id, $sep)
+            RETURN DISTINCT a.entity_id AS source, b.entity_id AS target, properties(r) AS properties
+            """
+            result = await session.run(query, chunk_ids=chunk_ids, sep=GRAPH_FIELD_SEP)
+            edges = []
+            async for record in result:
+                edge_properties = record["properties"]
+                edge_properties["source"] = record["source"]
+                edge_properties["target"] = record["target"]
+                edges.append(edge_properties)
+            await result.consume()
+            return edges
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
@@ -778,9 +819,6 @@ class Neo4JStorage(BaseGraphStorage):
                     )
                     result = await tx.run(
                         query, entity_id=node_id, properties=properties
-                    )
-                    logger.debug(
-                        f"Upserted node with entity_id '{node_id}' and properties: {properties}"
                     )
                     await result.consume()  # Ensure result is fully consumed
 
@@ -837,12 +875,7 @@ class Neo4JStorage(BaseGraphStorage):
                         properties=edge_properties,
                     )
                     try:
-                        records = await result.fetch(2)
-                        if records:
-                            logger.debug(
-                                f"Upserted edge from '{source_node_id}' to '{target_node_id}'"
-                                f"with properties: {edge_properties}"
-                            )
+                        await result.fetch(2)
                     finally:
                         await result.consume()  # Ensure result is consumed
 
